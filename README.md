@@ -28,7 +28,7 @@ sampling.
  best candidate / threshold filter
        |
        v
- LabelCalibrator                     fit temperature + quality weights
+ LabelCalibrator                     calibrate + build + filter + weight
        |
        v
  CalibratedLabel[]
@@ -41,7 +41,7 @@ sampling.
        +--------------+---------------+----------------+
                               |
                               v
-                    StudentTrainer / TinyStudent
+              StudentTrainer / TinyStudent / TransformerStudent
                               |
                     +---------+---------+
                     |                   |
@@ -95,9 +95,17 @@ tiny-distillation/
 │   │   ├── scorer.py                 weighted composite scorer
 │   │   └── strategies.py             specialized scoring variants
 │   ├── calibrated_labels/
-│   │   └── calibrator.py             temperature and target calibration
-│   ├── training/
-│   │   └── student_training.py       student model and four objectives
+│   │   ├── base.py                   four abstract strategy contracts
+│   │   ├── calibration.py            identity and temperature calibration
+│   │   ├── label_builders.py         teacher and ground-truth targets
+│   │   ├── filtering.py              acceptance and uncertainty filters
+│   │   ├── weighting.py              score and uncertainty weights
+│   │   └── calibrator.py             config and strategy orchestration
+│   ├── student_training/
+│   │   ├── models.py                 abstract, GRU, and Transformer students
+│   │   ├── losses.py                 modular distillation objectives
+│   │   ├── schedules.py              static and curriculum loss weights
+│   │   └── student_training.py       trainer, data, and experiment state
 │   ├── inference/
 │   │   └── speculative_decoding.py   draft/verify sampling
 │   ├── evaluation/
@@ -109,11 +117,13 @@ tiny-distillation/
 │   ├── demo.py                       offline comparison experiment
 │   └── __main__.py                   command-line entry point
 └── tests/
+    ├── test_calibrated_labels.py
     ├── test_evaluation_metrics.py
     ├── test_pipeline.py
     ├── test_reasoning_strategies.py
     ├── test_scoring_strategies.py
     ├── test_speculative_decoding.py
+    ├── test_student_training.py
     └── test_teachers.py
 ```
 
@@ -226,6 +236,167 @@ scorer = RewardScorer(
 
 `best_per_example` is implemented by the shared base class, so every strategy
 works with `DistillationPipeline` without special orchestration.
+
+## Calibrated labels
+
+The calibrated-label stage has four independently replaceable steps:
+
+```text
+teacher logits -> probability calibration -> quality filter
+               -> hard/soft target builder -> sample weighting
+               -> CalibratedLabel
+```
+
+Each step shares an abstract contract:
+
+| Step | Base class | Built-in strategies |
+| --- | --- | --- |
+| Probability calibration | `CalibrationStrategy` | `TemperatureCalibration`, `IdentityCalibration` |
+| Target construction | `LabelBuilder` | `TeacherLabelBuilder`, `GroundTruthBlendLabelBuilder` |
+| Quality filtering | `LabelFilter` | `AcceptedLabelFilter`, `QualityLabelFilter`, `CompositeLabelFilter` |
+| Sample weighting | `WeightingStrategy` | Score, confidence, inverse entropy, or top-two margin |
+
+`CalibrationConfig` selects the built-ins without requiring custom classes:
+
+```python
+from tiny_distillation import CalibrationConfig, LabelCalibrator
+
+calibrator = LabelCalibrator(
+    CalibrationConfig(
+        calibration_method="temperature",
+        label_building_method="ground_truth_blend",
+        ground_truth_weight=0.25,
+        label_smoothing=0.05,
+        top_k=4,
+        minimum_confidence=0.65,
+        maximum_entropy=0.8,
+        minimum_margin=0.1,
+        weighting_method="entropy",
+        minimum_weight=0.1,
+    )
+)
+```
+
+Temperature fitting uses labeled examples to minimize score-weighted negative
+log-likelihood. It leaves teacher ranking unchanged but adjusts how sharp the
+soft targets are. `identity` skips fitting and applies standard softmax.
+
+The teacher target builder uses the calibrated argmax for hard CE and the full
+distribution for soft KL. It can retain only the top-k classes and apply label
+smoothing. Ground-truth blending keeps a trusted dataset label as the hard
+target and mixes its one-hot distribution into the teacher soft target.
+
+Quality filters can reject labels based on the scorer's acceptance decision,
+maximum calibrated probability, normalized entropy, and the probability margin
+between the top two classes. Retained labels can then be weighted by source
+score, confidence, inverse entropy, or margin. Strategy names are recorded in
+each `CalibratedLabel.metadata` mapping for experiment provenance.
+
+Application-specific behavior can be injected directly:
+
+```python
+calibrator = LabelCalibrator(
+    calibration_strategy=my_calibration,
+    label_builder=my_label_builder,
+    label_filter=my_filter,
+    weighting_strategy=my_weighting,
+)
+```
+
+## Student training
+
+`StudentTrainer` accepts any `StudentModel` implementation. The package
+includes the compact GRU-based `TinyStudent` and a `TransformerStudent` prompt
+encoder with the same answer-conditioned rationale decoder.
+
+Each objective inherits `DistillationLoss`:
+
+| Mode | Strategy | Objective |
+| --- | --- | --- |
+| `hard` | `HardCrossEntropyLoss` | Cross-entropy against the hard target |
+| `soft` | `SoftKLDistillationLoss` | KL divergence against calibrated teacher probabilities |
+| `cot` | `CoTTokenCrossEntropyLoss` | Masked rationale-token cross-entropy |
+| `combined` | `CombinedDistillationLoss` | Configurable weighted sum of all objectives |
+
+Soft-label temperature is applied to both distributions. Stored teacher
+probabilities are converted with `softmax(log(probabilities) / temperature)`,
+while student logits are divided by the same temperature. This keeps KL
+temperature experiments internally consistent even after label calibration.
+
+```python
+from tiny_distillation import (
+    SamplingMethod,
+    StudentTrainer,
+    TrainerConfig,
+    TransformerStudent,
+    Vocabulary,
+)
+
+vocabulary = Vocabulary.from_labels(artifacts.labels)
+student = TransformerStudent(
+    len(vocabulary),
+    num_labels=number_of_labels,
+    embedding_dim=128,
+    hidden_dim=128,
+    num_heads=4,
+    pad_id=vocabulary.pad_id,
+)
+trainer = StudentTrainer(
+    student,
+    vocabulary,
+    TrainerConfig(
+        mode="combined",
+        epochs=20,
+        validation_fraction=0.15,
+        early_stopping_patience=3,
+        warmup_epochs=2,
+        weight_decay=0.01,
+        gradient_accumulation_steps=4,
+        mixed_precision=True,
+        sampling_method=SamplingMethod.CLASS_BALANCED,
+        cot_warmup_epochs=5,
+        teacher_forcing_ratio=1.0,
+        final_teacher_forcing_ratio=0.5,
+        max_reasoning_tokens=128,
+        checkpoint_path="artifacts/student.pt",
+        experiment_log_path="artifacts/experiment.json",
+    ),
+)
+history = trainer.train(artifacts.labels)
+```
+
+Training supports:
+
+- deterministic train/validation splitting, best-state restoration, and early
+  stopping;
+- AdamW weight decay, learning-rate warmup plus cosine decay, gradient
+  accumulation, clipping, and CUDA mixed precision;
+- shuffled, quality-weighted, or class-balanced sampling;
+- linear CoT-loss warmup and scheduled teacher forcing;
+- answer-conditioned reasoning, rationale truncation, and explicit token masks;
+- checkpoint and JSON experiment records containing configuration, seed,
+  per-loss curves, learning rates, label-calibration metadata, and evaluation
+  metrics.
+
+`DistillationPipeline.evaluate` automatically records its metrics in the
+trainer's configured checkpoint and experiment log. For evaluation performed
+outside the pipeline, call `trainer.record_evaluation(metrics)`.
+
+Custom loss combinations can be passed through `loss_strategy`, and custom
+curricula can inherit `LossWeightScheduler`:
+
+```python
+trainer = StudentTrainer(
+    student,
+    vocabulary,
+    config,
+    loss_strategy=my_loss,
+    loss_weight_scheduler=my_schedule,
+)
+```
+
+Mixed precision activates only when the configured device is CUDA. It remains
+disabled on CPU even when `mixed_precision=True`.
 
 ## Evaluation metrics
 

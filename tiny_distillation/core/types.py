@@ -48,6 +48,7 @@ class CalibratedLabel:
     reasoning: str
     weight: float
     source_score: float
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -56,3 +57,8 @@ class TrainingHistory:
     hard_losses: tuple[float, ...]
     soft_losses: tuple[float, ...]
     cot_losses: tuple[float, ...]
+    validation_losses: tuple[float, ...] = ()
+    learning_rates: tuple[float, ...] = ()
+    teacher_forcing_ratios: tuple[float, ...] = ()
+    best_epoch: int | None = None
+    stopped_early: bool = False

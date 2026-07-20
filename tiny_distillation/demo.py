@@ -16,7 +16,7 @@ from tiny_distillation.inference import (
 )
 from tiny_distillation.pipeline import DistillationPipeline
 from tiny_distillation.teachers import RuleBasedArithmeticTeacher
-from tiny_distillation.training import (
+from tiny_distillation.student_training import (
     DistillationMode,
     StudentTrainer,
     TinyStudent,

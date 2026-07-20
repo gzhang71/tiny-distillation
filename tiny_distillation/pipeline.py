@@ -20,7 +20,7 @@ from tiny_distillation.generate_reasoning import (
 )
 from tiny_distillation.score import CompositeScorer, ScoringStrategy
 from tiny_distillation.teachers import Teacher
-from tiny_distillation.training import StudentTrainer
+from tiny_distillation.student_training import StudentTrainer
 
 
 @dataclass(frozen=True)
@@ -87,7 +87,7 @@ class DistillationPipeline:
                 str(example.metadata.get("reference_reasoning", ""))
                 for example in labeled
             ]
-        return evaluate_classification(
+        report = evaluate_classification(
             logits,
             [int(example.label) for example in labeled],
             generated_reasoning=(
@@ -95,3 +95,5 @@ class DistillationPipeline:
             ),
             reference_reasoning=reference_reasoning,
         )
+        trainer.record_evaluation(report.metric_values)
+        return report
