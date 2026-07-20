@@ -18,7 +18,7 @@ from tiny_distillation.generate_reasoning import (
     ReasoningGenerationConfig,
     generate_reasoning,
 )
-from tiny_distillation.score import CompositeScorer
+from tiny_distillation.score import CompositeScorer, ScoringStrategy
 from tiny_distillation.teachers import Teacher
 from tiny_distillation.training import StudentTrainer
 
@@ -36,7 +36,7 @@ class DistillationPipeline:
         self,
         teacher: Teacher,
         *,
-        scorer: CompositeScorer | None = None,
+        scorer: ScoringStrategy | None = None,
         calibrator: LabelCalibrator | None = None,
         generation_config: ReasoningGenerationConfig | None = None,
     ) -> None:

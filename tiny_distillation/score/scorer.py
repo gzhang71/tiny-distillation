@@ -12,6 +12,7 @@ from tiny_distillation.core.types import (
     TeacherPrediction,
     TrainingExample,
 )
+from tiny_distillation.score.base import ScoringStrategy
 
 
 def normalize_answer(answer: str) -> str:
@@ -36,7 +37,7 @@ class ScoringConfig:
             raise ValueError("minimum_reasoning_words must be positive")
 
 
-class CompositeScorer:
+class CompositeScorer(ScoringStrategy):
     """Combines correctness, trace quality, confidence, and an optional reward."""
 
     def __init__(
@@ -91,17 +92,6 @@ class CompositeScorer:
             accepted=total_score >= config.acceptance_threshold,
             diagnostics=diagnostics,
         )
-
-    @staticmethod
-    def best_per_example(
-        scored: Iterable[ScoredPrediction],
-    ) -> list[ScoredPrediction]:
-        best: dict[str, ScoredPrediction] = {}
-        for item in scored:
-            example_id = item.prediction.example_id
-            if example_id not in best or item.total_score > best[example_id].total_score:
-                best[example_id] = item
-        return list(best.values())
 
     @staticmethod
     def _answer_score(

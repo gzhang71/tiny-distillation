@@ -91,7 +91,9 @@ tiny-distillation/
 │   │   ├── strategies.py             built-in reasoning behaviors
 │   │   └── generator.py              candidate orchestration
 │   ├── score/
-│   │   └── scorer.py                 quality scoring and filtering
+│   │   ├── base.py                   abstract scoring contract
+│   │   ├── scorer.py                 weighted composite scorer
+│   │   └── strategies.py             specialized scoring variants
 │   ├── calibrated_labels/
 │   │   └── calibrator.py             temperature and target calibration
 │   ├── training/
@@ -106,6 +108,7 @@ tiny-distillation/
 └── tests/
     ├── test_pipeline.py
     ├── test_reasoning_strategies.py
+    ├── test_scoring_strategies.py
     ├── test_speculative_decoding.py
     └── test_teachers.py
 ```
@@ -164,6 +167,61 @@ class EvidenceFirstStrategy(ReasoningStrategy):
 
 config = ReasoningGenerationConfig(strategy=EvidenceFirstStrategy())
 ```
+
+## Scoring strategies
+
+All scorers inherit `ScoringStrategy` and produce the same
+`ScoredPrediction` contract:
+
+| Scorer | Total-score source | Useful for |
+| --- | --- | --- |
+| `CompositeScorer` | Answer, reasoning, and confidence weights | General default |
+| `ExactAnswerScorer` | Reference-answer agreement | Tasks with trusted labels |
+| `ConfidenceScorer` | Teacher confidence | Confidence ablations |
+| `ReasoningQualityScorer` | Rationale quality heuristics | CoT filtering |
+| `RewardScorer` | External verifier callback | Code tests, judges, reward models |
+| `ConsensusScorer` | Base quality plus candidate agreement | Self-consistency |
+
+Consensus scoring is most useful with multiple independently generated
+candidates:
+
+```python
+from tiny_distillation import (
+    CompositeScorer,
+    ConsensusScorer,
+    ConsensusScoringConfig,
+)
+
+pipeline = DistillationPipeline(
+    teacher,
+    generation_config=ReasoningGenerationConfig(
+        strategy="self_consistency",
+        candidates_per_example=5,
+    ),
+    scorer=ConsensusScorer(
+        base_scorer=CompositeScorer(),
+        config=ConsensusScoringConfig(
+            consensus_weight=0.4,
+            acceptance_threshold=0.65,
+        ),
+    ),
+)
+```
+
+For task-specific verification, make the callback return a normalized score
+from zero to one:
+
+```python
+from tiny_distillation import RewardScorer
+
+scorer = RewardScorer(
+    lambda prediction, example: run_task_verifier(prediction.answer),
+    acceptance_threshold=0.8,
+)
+```
+
+`best_per_example` is implemented by the shared base class, so every strategy
+works with `DistillationPipeline` without special orchestration.
 
 ## Run the experiment
 
