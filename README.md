@@ -101,11 +101,15 @@ tiny-distillation/
 │   ├── inference/
 │   │   └── speculative_decoding.py   draft/verify sampling
 │   ├── evaluation/
-│   │   └── metrics.py                task, calibration, and CoT metrics
+│   │   ├── base.py                   metric context and abstract contract
+│   │   ├── classification.py         task, confidence, and calibration
+│   │   ├── reasoning.py              rationale comparison metrics
+│   │   └── metrics.py                orchestration and evaluation report
 │   ├── pipeline.py                   stage orchestration
 │   ├── demo.py                       offline comparison experiment
 │   └── __main__.py                   command-line entry point
 └── tests/
+    ├── test_evaluation_metrics.py
     ├── test_pipeline.py
     ├── test_reasoning_strategies.py
     ├── test_scoring_strategies.py
@@ -222,6 +226,59 @@ scorer = RewardScorer(
 
 `best_per_example` is implemented by the shared base class, so every strategy
 works with `DistillationPipeline` without special orchestration.
+
+## Evaluation metrics
+
+Every metric inherits `EvaluationMetric` and consumes a shared
+`EvaluationContext`.
+
+| Category | Metrics |
+| --- | --- |
+| Classification | Accuracy, top-k accuracy, macro precision, recall, and F1 |
+| Probabilistic | Negative log-likelihood and Brier score |
+| Calibration | Expected and maximum calibration error |
+| Uncertainty | Mean confidence and predictive entropy |
+| Reasoning | Exact match and token precision, recall, and F1 |
+
+`evaluate_classification` computes all applicable built-ins. Reasoning metrics
+are included when generated and reference traces are supplied:
+
+```python
+report = evaluate_classification(
+    logits,
+    targets,
+    top_k=3,
+    num_bins=15,
+    generated_reasoning=student_reasoning,
+    reference_reasoning=teacher_reasoning,
+)
+
+print(report.macro_f1)
+print(report.maximum_calibration_error)
+print(report.reasoning_token_recall)
+```
+
+Custom metrics implement one scalar computation and can be added without
+changing `EvaluationReport`:
+
+```python
+from tiny_distillation import EvaluationMetric
+
+class AbstentionRateMetric(EvaluationMetric):
+    name = "abstention_rate"
+
+    def compute(self, context):
+        return float(context.confidence.lt(0.6).float().mean())
+
+report = evaluate_classification(
+    logits,
+    targets,
+    additional_metrics=[AbstentionRateMetric()],
+)
+print(report["abstention_rate"])
+```
+
+Every computed value is also available through `report.metric_values`.
 
 ## Run the experiment
 

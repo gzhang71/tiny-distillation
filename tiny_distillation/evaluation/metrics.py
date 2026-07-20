@@ -1,14 +1,33 @@
-"""Classification, calibration, and reasoning metrics."""
+"""Evaluation orchestration and backward-compatible report fields."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 
 import torch
 from torch import Tensor
 
-from tiny_distillation.score import normalize_answer
+from tiny_distillation.evaluation.base import EvaluationContext, EvaluationMetric
+from tiny_distillation.evaluation.classification import (
+    AccuracyMetric,
+    BrierScoreMetric,
+    ExpectedCalibrationErrorMetric,
+    MacroF1Metric,
+    MacroPrecisionMetric,
+    MacroRecallMetric,
+    MaximumCalibrationErrorMetric,
+    MeanConfidenceMetric,
+    NegativeLogLikelihoodMetric,
+    PredictiveEntropyMetric,
+    TopKAccuracyMetric,
+)
+from tiny_distillation.evaluation.reasoning import (
+    ReasoningExactMatchMetric,
+    ReasoningTokenF1Metric,
+    ReasoningTokenPrecisionMetric,
+    ReasoningTokenRecallMetric,
+)
 
 
 @dataclass(frozen=True)
@@ -19,6 +38,19 @@ class EvaluationReport:
     expected_calibration_error: float
     reasoning_exact_match: float | None = None
     reasoning_token_f1: float | None = None
+    macro_precision: float = 0.0
+    macro_recall: float = 0.0
+    macro_f1: float = 0.0
+    top_k_accuracy: float = 0.0
+    mean_confidence: float = 0.0
+    predictive_entropy: float = 0.0
+    maximum_calibration_error: float = 0.0
+    reasoning_token_precision: float | None = None
+    reasoning_token_recall: float | None = None
+    metric_values: Mapping[str, float] = field(default_factory=dict)
+
+    def __getitem__(self, metric_name: str) -> float:
+        return self.metric_values[metric_name]
 
 
 def evaluate_classification(
@@ -26,84 +58,103 @@ def evaluate_classification(
     targets: Sequence[int],
     *,
     num_bins: int = 10,
+    top_k: int = 3,
     generated_reasoning: Sequence[str] | None = None,
     reference_reasoning: Sequence[str] | None = None,
+    additional_metrics: Sequence[EvaluationMetric] = (),
 ) -> EvaluationReport:
+    context = _build_context(
+        logits,
+        targets,
+        generated_reasoning,
+        reference_reasoning,
+    )
+    metrics: list[EvaluationMetric] = [
+        AccuracyMetric(),
+        NegativeLogLikelihoodMetric(),
+        BrierScoreMetric(),
+        ExpectedCalibrationErrorMetric(num_bins),
+        MacroPrecisionMetric(),
+        MacroRecallMetric(),
+        MacroF1Metric(),
+        TopKAccuracyMetric(top_k),
+        MeanConfidenceMetric(),
+        PredictiveEntropyMetric(),
+        MaximumCalibrationErrorMetric(num_bins),
+    ]
+    if context.generated_reasoning is not None:
+        metrics.extend(
+            [
+                ReasoningExactMatchMetric(),
+                ReasoningTokenPrecisionMetric(),
+                ReasoningTokenRecallMetric(),
+                ReasoningTokenF1Metric(),
+            ]
+        )
+    metrics.extend(additional_metrics)
+
+    values: dict[str, float] = {}
+    for metric in metrics:
+        if metric.name in values:
+            raise ValueError(f"duplicate evaluation metric name: {metric.name}")
+        values[metric.name] = metric.compute(context)
+
+    return EvaluationReport(
+        accuracy=values["accuracy"],
+        negative_log_likelihood=values["negative_log_likelihood"],
+        brier_score=values["brier_score"],
+        expected_calibration_error=values["expected_calibration_error"],
+        macro_precision=values["macro_precision"],
+        macro_recall=values["macro_recall"],
+        macro_f1=values["macro_f1"],
+        top_k_accuracy=values["top_k_accuracy"],
+        mean_confidence=values["mean_confidence"],
+        predictive_entropy=values["predictive_entropy"],
+        maximum_calibration_error=values["maximum_calibration_error"],
+        reasoning_exact_match=values.get("reasoning_exact_match"),
+        reasoning_token_precision=values.get("reasoning_token_precision"),
+        reasoning_token_recall=values.get("reasoning_token_recall"),
+        reasoning_token_f1=values.get("reasoning_token_f1"),
+        metric_values=values,
+    )
+
+
+def _build_context(
+    logits: Tensor | Sequence[Sequence[float]],
+    targets: Sequence[int],
+    generated_reasoning: Sequence[str] | None,
+    reference_reasoning: Sequence[str] | None,
+) -> EvaluationContext:
     scores = torch.as_tensor(logits, dtype=torch.float32)
     labels = torch.as_tensor(targets, dtype=torch.long)
     if scores.ndim != 2 or len(scores) != len(labels) or len(labels) == 0:
         raise ValueError("logits must be [examples, labels] and match non-empty targets")
-    probabilities = scores.softmax(dim=-1)
-    confidence, predictions = probabilities.max(dim=-1)
-    correct = predictions.eq(labels)
-    accuracy = float(correct.float().mean())
-    target_probability = probabilities.gather(1, labels.unsqueeze(1)).squeeze(1)
-    nll = float(-target_probability.clamp_min(1e-12).log().mean())
-    one_hot = torch.nn.functional.one_hot(labels, scores.shape[1]).float()
-    brier = float(((probabilities - one_hot) ** 2).sum(dim=-1).mean())
-    ece = _expected_calibration_error(confidence, correct, num_bins)
-
-    exact_match: float | None = None
-    token_f1: float | None = None
+    if bool(labels.lt(0).any()) or bool(labels.ge(scores.shape[1]).any()):
+        raise ValueError("targets must be valid class indices")
     if generated_reasoning is not None or reference_reasoning is not None:
         if (
             generated_reasoning is None
             or reference_reasoning is None
             or len(generated_reasoning) != len(reference_reasoning)
+            or len(generated_reasoning) != len(labels)
         ):
-            raise ValueError("generated and reference reasoning must have equal lengths")
-        exact_match = sum(
-            normalize_answer(generated) == normalize_answer(reference)
-            for generated, reference in zip(generated_reasoning, reference_reasoning)
-        ) / max(1, len(generated_reasoning))
-        token_f1 = sum(
-            _token_f1(generated, reference)
-            for generated, reference in zip(generated_reasoning, reference_reasoning)
-        ) / max(1, len(generated_reasoning))
+            raise ValueError(
+                "generated and reference reasoning must match the number of targets"
+            )
 
-    return EvaluationReport(
-        accuracy=accuracy,
-        negative_log_likelihood=nll,
-        brier_score=brier,
-        expected_calibration_error=ece,
-        reasoning_exact_match=exact_match,
-        reasoning_token_f1=token_f1,
+    probabilities = scores.softmax(dim=-1)
+    confidence, predictions = probabilities.max(dim=-1)
+    return EvaluationContext(
+        logits=scores,
+        targets=labels,
+        probabilities=probabilities,
+        predictions=predictions,
+        confidence=confidence,
+        correct=predictions.eq(labels),
+        generated_reasoning=(
+            tuple(generated_reasoning) if generated_reasoning is not None else None
+        ),
+        reference_reasoning=(
+            tuple(reference_reasoning) if reference_reasoning is not None else None
+        ),
     )
-
-
-def _expected_calibration_error(
-    confidence: Tensor,
-    correct: Tensor,
-    num_bins: int,
-) -> float:
-    if num_bins < 1:
-        raise ValueError("num_bins must be positive")
-    boundaries = torch.linspace(0, 1, num_bins + 1)
-    result = torch.tensor(0.0)
-    for index in range(num_bins):
-        lower, upper = boundaries[index], boundaries[index + 1]
-        in_bin = confidence.gt(lower) & confidence.le(upper)
-        if bool(in_bin.any()):
-            proportion = in_bin.float().mean()
-            accuracy = correct[in_bin].float().mean()
-            average_confidence = confidence[in_bin].mean()
-            result += proportion * (accuracy - average_confidence).abs()
-    return float(result)
-
-
-def _token_f1(generated: str, reference: str) -> float:
-    generated_tokens = normalize_answer(generated).split()
-    reference_tokens = normalize_answer(reference).split()
-    if not generated_tokens or not reference_tokens:
-        return float(generated_tokens == reference_tokens)
-    generated_counts = {token: generated_tokens.count(token) for token in set(generated_tokens)}
-    reference_counts = {token: reference_tokens.count(token) for token in set(reference_tokens)}
-    overlap = sum(
-        min(count, reference_counts.get(token, 0))
-        for token, count in generated_counts.items()
-    )
-    if overlap == 0:
-        return 0.0
-    precision = overlap / len(generated_tokens)
-    recall = overlap / len(reference_tokens)
-    return 2 * precision * recall / (precision + recall)
