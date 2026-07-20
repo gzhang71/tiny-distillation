@@ -79,12 +79,20 @@ tiny-distillation/
 │   │   ├── types.py                  shared pipeline records
 │   │   └── math_utils.py             softmax, argmax, and clamping
 │   ├── teachers/
-│   │   └── teacher.py                protocol, adapter, demo teacher
+│   │   ├── base.py                   abstract Teacher and shared projection
+│   │   ├── callable.py               application-owned callback adapter
+│   │   ├── openai_teacher.py         ChatGPT / Responses API
+│   │   ├── anthropic_teacher.py      Claude / Messages API
+│   │   ├── deepseek_teacher.py       DeepSeek / Chat Completions API
+│   │   ├── huggingface_teacher.py    Llama, T5, and Qwen3.5
+│   │   └── rule_based.py             deterministic arithmetic teacher
 │   ├── preparation/
-│   │   ├── generate_reasoning.py     multi-candidate trace generation
-│   │   ├── score.py                  quality scoring and filtering
-│   │   ├── socre.py                  original-spelling compatibility import
-│   │   └── calibrated_labels.py      temperature and target calibration
+│   │   ├── generate_reasoning/
+│   │   │   └── generator.py          multi-candidate trace generation
+│   │   ├── score/
+│   │   │   └── scorer.py             quality scoring and filtering
+│   │   └── calibrated_labels/
+│   │       └── calibrator.py         temperature and target calibration
 │   ├── training/
 │   │   └── student_training.py       student model and four objectives
 │   ├── inference/
@@ -96,7 +104,8 @@ tiny-distillation/
 │   └── __main__.py                   command-line entry point
 └── tests/
     ├── test_pipeline.py
-    └── test_speculative_decoding.py
+    ├── test_speculative_decoding.py
+    └── test_teachers.py
 ```
 
 Each subpackage exports its public types through its own `__init__.py`. The
@@ -127,8 +136,74 @@ repository's virtual environment:
 
 ## Use with a real teacher
 
-Adapt an API or local model with `CallableTeacher`. The callback returns a
-`TeacherPrediction` containing:
+Every implementation inherits the abstract `Teacher` class. The base class
+builds the structured prompt, parses the provider response, validates the
+answer, and converts it to a `TeacherPrediction`. Subclasses only implement the
+backend request.
+
+Install only the provider integrations needed by the experiment:
+
+```bash
+# ChatGPT, Claude, and DeepSeek
+.venv/bin/python -m pip install -e '.[api]'
+
+# Llama, T5, and Qwen3.5 through Transformers
+.venv/bin/python -m pip install -e '.[hf]'
+
+# Every example teacher
+.venv/bin/python -m pip install -e '.[teachers]'
+```
+
+Hosted adapters use `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and
+`DEEPSEEK_API_KEY`, respectively. Clients can also be constructed by the
+application and passed through the `client` argument.
+
+```python
+from tiny_distillation import (
+    ChatGPTTeacher,
+    ClaudeTeacher,
+    DeepSeekTeacher,
+    DistillationPipeline,
+    LlamaTeacher,
+    Qwen35Teacher,
+    T5Teacher,
+)
+
+labels = ["A", "B", "C", "D"]
+
+teachers = {
+    "chatgpt": ChatGPTTeacher(labels),
+    "claude": ClaudeTeacher(labels),
+    "deepseek": DeepSeekTeacher(labels),
+    "llama": LlamaTeacher(labels),
+    "t5": T5Teacher(labels),
+    "qwen3.5": Qwen35Teacher(labels),
+}
+
+pipeline = DistillationPipeline(teachers["chatgpt"])
+artifacts = pipeline.prepare(training_examples)
+```
+
+The defaults are examples, not fixed requirements. Override `model`, inject a
+configured SDK client, or supply already-loaded Transformers objects:
+
+```python
+teacher = Qwen35Teacher(
+    labels,
+    model="Qwen/Qwen3.5-2B",
+    model_kwargs={"device_map": "auto", "dtype": "auto"},
+    generation_kwargs={"do_sample": True, "temperature": 0.8},
+)
+```
+
+Hosted chat APIs generally return generated text rather than logits over an
+application-defined label space. By default, `Teacher` requires the generated
+answer to exactly match a configured label and turns the model's confidence
+into a categorical distribution. For free-form answers, provide a
+`label_projector` that returns one logit per label.
+
+The original `CallableTeacher` remains available when the application already
+produces a complete `TeacherPrediction` containing:
 
 - final answer text;
 - a reasoning trace;
@@ -157,6 +232,13 @@ def call_teacher(example, include_reasoning, candidate_index):
 pipeline = DistillationPipeline(CallableTeacher(call_teacher))
 artifacts = pipeline.prepare(training_examples)
 ```
+
+The adapters follow the official [OpenAI Responses API](https://developers.openai.com/api/docs/guides/text),
+[Anthropic Python SDK](https://platform.claude.com/docs/en/cli-sdks-libraries/sdks/python),
+[DeepSeek API](https://api-docs.deepseek.com/), and
+[Transformers generation](https://huggingface.co/docs/transformers/main_classes/text_generation)
+interfaces. Local chat models use their tokenizer's chat template; Qwen3.5 uses
+the official Transformers-compatible checkpoint.
 
 `PipelineArtifacts.labels` carries all target forms at once, so experiments use
 the same teacher data and differ only by `TrainerConfig.mode`.
