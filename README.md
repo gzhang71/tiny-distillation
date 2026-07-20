@@ -86,13 +86,12 @@ tiny-distillation/
 │   │   ├── deepseek_teacher.py       DeepSeek / Chat Completions API
 │   │   ├── huggingface_teacher.py    Llama, T5, and Qwen3.5
 │   │   └── rule_based.py             deterministic arithmetic teacher
-│   ├── preparation/
-│   │   ├── generate_reasoning/
-│   │   │   └── generator.py          multi-candidate trace generation
-│   │   ├── score/
-│   │   │   └── scorer.py             quality scoring and filtering
-│   │   └── calibrated_labels/
-│   │       └── calibrator.py         temperature and target calibration
+│   ├── generate_reasoning/
+│   │   └── generator.py              multi-candidate trace generation
+│   ├── score/
+│   │   └── scorer.py                 quality scoring and filtering
+│   ├── calibrated_labels/
+│   │   └── calibrator.py             temperature and target calibration
 │   ├── training/
 │   │   └── student_training.py       student model and four objectives
 │   ├── inference/

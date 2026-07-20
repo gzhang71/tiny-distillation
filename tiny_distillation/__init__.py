@@ -14,13 +14,17 @@ from tiny_distillation.inference import (
     speculative_decode,
 )
 from tiny_distillation.pipeline import DistillationPipeline, PipelineArtifacts
-from tiny_distillation.preparation import (
+from tiny_distillation.calibrated_labels import (
     CalibrationConfig,
-    CompositeScorer,
     LabelCalibrator,
+)
+from tiny_distillation.generate_reasoning import (
     ReasoningGenerationConfig,
-    ScoringConfig,
     generate_reasoning,
+)
+from tiny_distillation.score import (
+    CompositeScorer,
+    ScoringConfig,
 )
 from tiny_distillation.teachers import (
     CallableTeacher,

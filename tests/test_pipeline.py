@@ -3,10 +3,10 @@ import unittest
 
 import torch
 
+from tiny_distillation.calibrated_labels import CalibrationConfig, LabelCalibrator
 from tiny_distillation.core import TrainingExample
 from tiny_distillation.evaluation import evaluate_classification
 from tiny_distillation.pipeline import DistillationPipeline
-from tiny_distillation.preparation import CalibrationConfig, LabelCalibrator
 from tiny_distillation.teachers import RuleBasedArithmeticTeacher
 from tiny_distillation.training import (
     DistillationMode,

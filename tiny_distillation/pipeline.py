@@ -12,13 +12,13 @@ from tiny_distillation.core import (
     TrainingExample,
     TrainingHistory,
 )
+from tiny_distillation.calibrated_labels import LabelCalibrator
 from tiny_distillation.evaluation import EvaluationReport, evaluate_classification
-from tiny_distillation.preparation import (
-    CompositeScorer,
-    LabelCalibrator,
+from tiny_distillation.generate_reasoning import (
     ReasoningGenerationConfig,
     generate_reasoning,
 )
+from tiny_distillation.score import CompositeScorer
 from tiny_distillation.teachers import Teacher
 from tiny_distillation.training import StudentTrainer
 

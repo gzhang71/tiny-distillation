@@ -8,7 +8,7 @@ from collections.abc import Sequence
 import torch
 from torch import Tensor
 
-from tiny_distillation.preparation.score import normalize_answer
+from tiny_distillation.score import normalize_answer
 
 
 @dataclass(frozen=True)
