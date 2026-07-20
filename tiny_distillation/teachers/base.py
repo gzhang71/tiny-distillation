@@ -110,10 +110,17 @@ class Teacher(ABC):
             if include_reasoning
             else "Set 'reasoning' to an empty string."
         )
+        generation_instruction = example.metadata.get("generation_instruction")
+        strategy_instruction = (
+            f"\nGeneration behavior: {generation_instruction}"
+            if generation_instruction
+            else ""
+        )
         return (
             f"Labels: {json.dumps(self.labels)}\n"
             f"{reasoning_instruction}\n"
             f"Question: {example.prompt}"
+            f"{strategy_instruction}"
         )
 
     def parse_response(

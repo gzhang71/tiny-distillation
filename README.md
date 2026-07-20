@@ -87,7 +87,9 @@ tiny-distillation/
 │   │   ├── huggingface_teacher.py    Llama, T5, and Qwen3.5
 │   │   └── rule_based.py             deterministic arithmetic teacher
 │   ├── generate_reasoning/
-│   │   └── generator.py              multi-candidate trace generation
+│   │   ├── base.py                   abstract strategy contract
+│   │   ├── strategies.py             built-in reasoning behaviors
+│   │   └── generator.py              candidate orchestration
 │   ├── score/
 │   │   └── scorer.py                 quality scoring and filtering
 │   ├── calibrated_labels/
@@ -103,6 +105,7 @@ tiny-distillation/
 │   └── __main__.py                   command-line entry point
 └── tests/
     ├── test_pipeline.py
+    ├── test_reasoning_strategies.py
     ├── test_speculative_decoding.py
     └── test_teachers.py
 ```
@@ -111,6 +114,56 @@ Each subpackage exports its public types through its own `__init__.py`. The
 top-level package re-exports the main API, so application code can continue to
 use `from tiny_distillation import ...`. Internal modules also use absolute
 package imports, for example `from tiny_distillation.core import TrainingExample`.
+
+## Reasoning strategies
+
+`ReasoningGenerationConfig.strategy` controls how the teacher creates its
+supervision trace:
+
+| Strategy | Behavior |
+| --- | --- |
+| `direct` | Final answer without a rationale |
+| `rationale` | Concise, self-contained justification |
+| `step_by_step` | Numbered and verifiable solution steps |
+| `answer_then_rationale` | Commit to the answer before explaining |
+| `critique_revision` | Draft once, then critique and revise in a second call |
+| `self_consistency` | Produce independently prompted candidates |
+
+```python
+from tiny_distillation import (
+    DistillationPipeline,
+    ReasoningGenerationConfig,
+)
+
+pipeline = DistillationPipeline(
+    teacher,
+    generation_config=ReasoningGenerationConfig(
+        strategy="self_consistency",
+        candidates_per_example=5,
+        custom_instruction="Keep the rationale under four sentences.",
+        deduplicate_candidates=True,
+    ),
+)
+```
+
+`include_reasoning` normally follows the strategy: it is disabled for `direct`
+and enabled for the others. Setting it explicitly overrides that default.
+Candidate ranking and acceptance still happen in the `score` stage.
+
+Custom behavior inherits `ReasoningStrategy` and implements
+`build_instruction`:
+
+```python
+from tiny_distillation import ReasoningStrategy
+
+class EvidenceFirstStrategy(ReasoningStrategy):
+    name = "evidence_first"
+
+    def build_instruction(self, example, candidate_index):
+        return "List the decisive evidence before giving the final answer."
+
+config = ReasoningGenerationConfig(strategy=EvidenceFirstStrategy())
+```
 
 ## Run the experiment
 

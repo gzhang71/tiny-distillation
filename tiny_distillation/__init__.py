@@ -19,7 +19,15 @@ from tiny_distillation.calibrated_labels import (
     LabelCalibrator,
 )
 from tiny_distillation.generate_reasoning import (
+    AnswerThenRationaleStrategy,
+    CritiqueRevisionStrategy,
+    DirectStrategy,
+    RationaleStrategy,
     ReasoningGenerationConfig,
+    ReasoningStrategy,
+    ReasoningStrategyName,
+    SelfConsistencyStrategy,
+    StepByStepStrategy,
     generate_reasoning,
 )
 from tiny_distillation.score import (
@@ -47,12 +55,15 @@ from tiny_distillation.training import (
 )
 
 __all__ = [
+    "AnswerThenRationaleStrategy",
     "CalibratedLabel",
     "CalibrationConfig",
     "CallableTeacher",
     "ChatGPTTeacher",
     "ClaudeTeacher",
     "CompositeScorer",
+    "CritiqueRevisionStrategy",
+    "DirectStrategy",
     "DistillationMode",
     "DistillationPipeline",
     "DeepSeekTeacher",
@@ -61,12 +72,17 @@ __all__ = [
     "LlamaTeacher",
     "PipelineArtifacts",
     "Qwen35Teacher",
+    "RationaleStrategy",
     "ReasoningGenerationConfig",
+    "ReasoningStrategy",
+    "ReasoningStrategyName",
     "RuleBasedArithmeticTeacher",
     "ScoredPrediction",
     "ScoringConfig",
     "SpeculativeDecodingConfig",
     "SpeculativeDecodingResult",
+    "SelfConsistencyStrategy",
+    "StepByStepStrategy",
     "StudentTrainer",
     "Teacher",
     "TeacherPrediction",
