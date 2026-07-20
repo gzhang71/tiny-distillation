@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tiny-distillation"
+version = "0.1.0"
+description = "A compact, modular knowledge-distillation pipeline"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=2.0",
+    "torch>=2.1",
+]
+
+[project.optional-dependencies]
+hf = ["transformers>=4.40"]
+test = ["pytest>=8"]
+
+[project.scripts]
+tiny-distillation = "tiny_distillation.demo:main"
+
+[tool.setuptools.packages.find]
+include = ["tiny_distillation*"]
